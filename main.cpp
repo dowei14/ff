@@ -9,14 +9,21 @@
 
 using namespace std;
 
+#define RUNS 2
+#define ITERATIONS 10
+#define MINI_BATCH 100
+#define EPOCHSPERBATCH 1
+
 #define SAMPLES 41653
 #define INPUTS 11
 #define OUTPUTS 7
+#define HIDDEN 10
 
 std::string inTrain = "../data/in11.txt";
 std::string outTrain = "../data/out7.txt";
 std::string inTest = "../data/in11.txt";
 std::string outTest = "../data/out7.txt";
+
 
 double train_in[SAMPLES][INPUTS];
 double train_out[SAMPLES][OUTPUTS];
@@ -24,92 +31,37 @@ double train_out[SAMPLES][OUTPUTS];
 double test_in[SAMPLES][INPUTS];
 double test_out[SAMPLES][OUTPUTS];
 
+
 class StateNN : public ANN
 {
 	public:
 		StateNN();
-		enum { nn_inputs = INPUTS, nn_hidden = 10, nn_outputs=OUTPUTS };
-		
+		enum { nn_inputs = INPUTS, nn_hidden = HIDDEN, nn_outputs=OUTPUTS };		
 };
 
-StateNN::StateNN() {
-
-	//set transfer function
-//	setDefaultTransferFunction(ANN::tanhFunction());
-	setDefaultTransferFunction(ANN::logisticFunction());
-
-	setNeuronNumber(nn_inputs+nn_hidden+nn_outputs); // total number of neurons
-
-	// create random number generator between -1 and 1
-    std::random_device rd; // obtain a random number from hardware
-    std::mt19937 eng(rd()); // seed the generator
-    std::uniform_real_distribution<> distr(-1, 1); // define the range
-
-	// initialize weights
-	for (int h=nn_inputs; h<(nn_inputs+nn_hidden);h++){
-		for (int i=0; i<nn_inputs;i++){
-			w(h,i,distr(eng));
-		}
-	}
-	for (int o=nn_inputs+nn_hidden; o<(nn_inputs+nn_hidden+nn_outputs);o++){
-		for (int h=nn_inputs; h<(nn_inputs+nn_hidden);h++){
-			w(o,h,distr(eng));
-		}
-	}
-}
-
 void loadData();
+void store(int run, int iteration, double error);
+Backpropagation createTrainer(StateNN &ann);
+TrainingPattern* getTrainingSample();
 
 int main(int argc, char **argv) {
 	loadData();
 
-	ofstream saveFile1;
-	saveFile1.open("result.txt",ios::out);
-	saveFile1.precision(5);
-	saveFile1<<fixed;
-
-	for (int q=0;q<2;q++){
+	for (int q=0;q<RUNS;q++){
 		cout<<"run: "<<q<<endl;
 		StateNN ann;
 		//cout<<ann.dumpWeights()<<endl;
-		// create a topolocial sorting of our network. This is required for the backpropagation algorithm as "Full Batch mode"
-		ann.updateTopologicalSort();
-		for (int a=0;a<100;a++){
+		ann.updateTopologicalSort(); // create a topolocial sorting of our network. This is required for the backpropagation algorithm as "Full Batch mode"
+		for (int a=0;a<ITERATIONS;a++){
 			// create backpropagation object
 			Backpropagation trainer;
-			trainer.setNeuralNetwork(&ann);
-			for (int i=0; i<ann.nn_inputs;i++){
-				trainer.defineInputNeuron(i, ann.getNeuron(i));
-			}
-			int output_counter = 0;
-			for (int o=ann.nn_inputs+ann.nn_hidden; o<(ann.nn_inputs+ann.nn_hidden+ann.nn_outputs);o++){
-				trainer.defineOutputNeuron(output_counter, ann.getNeuron(o));
-				output_counter++;
-			}	
-			trainer.includeAllSynapses();
-			trainer.includeAllNeuronBiases();
-			trainer.setLearningRate(0.01);
+			trainer = createTrainer(ann);
 			// create mini_batch
-			int mini_batch = 100;
-			for (int i=0;i<mini_batch;i++){
-				TrainingPattern* p = new TrainingPattern;
-				std::random_device rd; // obtain a random number from hardware
-		   	 	std::mt19937 eng(rd()); // seed the generator
-				std::uniform_real_distribution<> distr(0, (SAMPLES-1)); // define the range
-				int run_id =(int)distr(eng);
-				//cout<<run_id<<" ";
-				for (int n=0;n<INPUTS;n++){
-					p->inputs[n] = train_in[run_id][n];
-				}
-				for (int n=0;n<OUTPUTS;n++){
-					p->outputs[n] = train_out[run_id][n];
-				}
-				trainer.addTrainingPattern(p);
+			for (int i=0;i<MINI_BATCH;i++){
+				trainer.addTrainingPattern(getTrainingSample());
 			}
-			//cout<<endl;
-
 			// train
-			trainer.learn(10);
+			trainer.learn(EPOCHSPERBATCH);
 
 			// test
 			long errors = 0;
@@ -133,17 +85,25 @@ int main(int argc, char **argv) {
 					if (i == maxID) val = 1.0;
 					else val = 0.0;
 					if (val != test_out[n][i]) error = true;
-					//saveFile1 << val<<" ";
 				}
-				//saveFile1<<"\n";
 				if (error) errors++;
 			}
 			cout<<(double)errors/SAMPLES<<endl;
-			saveFile1 << (a+1)*10<< " " <<(double)errors/SAMPLES<<"\n";
+			store(q,(a+1)*10,(double)errors/SAMPLES);
 			//cout<<ann.dumpWeights()<<endl;
 		}
 	}
 }
+
+void store(int run, int iteration, double error){
+	ofstream results;
+	results.open("results.txt", ios::app);
+	results.precision(5);
+	results<<fixed;
+	results << run << " " << iteration << " " << error <<"\n";
+	results.close();
+}
+
 
 void loadData(){
 	ifstream data_inputs(inTrain.c_str()); //opening an input stream for file test.txt
@@ -206,5 +166,63 @@ void loadData(){
 	cout<<endl;
 	for (int i=0;i<OUTPUTS;i++) std::cout<<test_out[0][i]<<" ";
 	cout<<endl;	
+}
+
+StateNN::StateNN() {
+
+	//set transfer function
+//	setDefaultTransferFunction(ANN::tanhFunction());
+	setDefaultTransferFunction(ANN::logisticFunction());
+
+	setNeuronNumber(nn_inputs+nn_hidden+nn_outputs); // total number of neurons
+
+	// create random number generator between -1 and 1
+    std::random_device rd; // obtain a random number from hardware
+    std::mt19937 eng(rd()); // seed the generator
+    std::uniform_real_distribution<> distr(-1, 1); // define the range
+
+	// initialize weights
+	for (int h=nn_inputs; h<(nn_inputs+nn_hidden);h++){
+		for (int i=0; i<nn_inputs;i++){
+			w(h,i,distr(eng));
+		}
+	}
+	for (int o=nn_inputs+nn_hidden; o<(nn_inputs+nn_hidden+nn_outputs);o++){
+		for (int h=nn_inputs; h<(nn_inputs+nn_hidden);h++){
+			w(o,h,distr(eng));
+		}
+	}
+}
+
+Backpropagation createTrainer(StateNN &ann){
+	Backpropagation trainer;
+	trainer.setNeuralNetwork(&ann);
+	for (int i=0; i<ann.nn_inputs;i++){
+		trainer.defineInputNeuron(i, ann.getNeuron(i));
+	}
+	int output_counter = 0;
+	for (int o=ann.nn_inputs+ann.nn_hidden; o<(ann.nn_inputs+ann.nn_hidden+ann.nn_outputs);o++){
+		trainer.defineOutputNeuron(output_counter, ann.getNeuron(o));
+		output_counter++;
+	}	
+	trainer.includeAllSynapses();
+	trainer.includeAllNeuronBiases();
+	trainer.setLearningRate(0.01);
+	return trainer;
+}
+
+TrainingPattern* getTrainingSample(){
+	TrainingPattern* p = new TrainingPattern;
+	std::random_device rd; // obtain a random number from hardware
+ 	std::mt19937 eng(rd()); // seed the generator
+	std::uniform_real_distribution<> distr(0, (SAMPLES-1)); // define the range
+	int run_id =(int)distr(eng);
+	for (int n=0;n<INPUTS;n++){
+		p->inputs[n] = train_in[run_id][n];
+	}
+	for (int n=0;n<OUTPUTS;n++){
+		p->outputs[n] = train_out[run_id][n];
+	}
+	return p;
 }
 
